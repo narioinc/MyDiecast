@@ -1,23 +1,28 @@
 import React, { useState, useMemo } from 'react';
 import { View, StyleSheet, FlatList, Image, TouchableOpacity } from 'react-native';
-import { TextInput, Button, Appbar, useTheme, Surface, Text, List, Card } from 'react-native-paper';
+import { TextInput, Button, Appbar, useTheme, Surface, Text, List, Card, Portal } from 'react-native-paper';
 import { useCollection, Car } from '../context/CollectionContext';
 import { useNavigation } from '@react-navigation/native';
 import { launchCamera } from 'react-native-image-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { parseOCRText } from '../utils/ocrParser';
+import { detectAndCrop } from '../utils/CropUtils';
+import { Snackbar } from 'react-native-paper';
 import ImagePreviewModal from '../components/ImagePreviewModal';
 import Fuse from 'fuse.js';
 
 const SearchScreen = () => {
     const theme = useTheme();
     const navigation = useNavigation();
-    const { cars } = useCollection();
+    const { cars, findSimilarCars } = useCollection();
 
     const [searchQuery, setSearchQuery] = useState('');
     const [isScanning, setIsScanning] = useState(false);
+    const [isSearchingVisual, setIsSearchingVisual] = useState(false);
+    const [visualResults, setVisualResults] = useState<Car[]>([]);
     const [scanResult, setScanResult] = useState<{ found: boolean; car?: Car } | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [cropMessageVisible, setCropMessageVisible] = useState(false);
 
     const fuse = useMemo(() => {
         return new Fuse(cars, {
@@ -29,8 +34,44 @@ const SearchScreen = () => {
 
     const fuzzyResults = useMemo(() => {
         if (!searchQuery) return [];
-        return fuse.search(searchQuery).map(result => result.item);
+        return fuse.search(searchQuery).map((result: any) => result.item);
     }, [fuse, searchQuery]);
+
+    const handleVisualSearch = async () => {
+        const options = {
+            mediaType: 'photo' as const,
+            quality: 0.8 as const,
+            maxWidth: 224,
+            maxHeight: 224
+        };
+        const result = await launchCamera(options);
+
+        if (result.assets && result.assets.length > 0) {
+            const uri = result.assets[0].uri;
+            if (uri) {
+                setIsSearchingVisual(true);
+                setSearchQuery(''); // Clear text search
+                try {
+                    let finalUri = uri;
+                    const cropResult = await detectAndCrop(uri);
+                    if (cropResult) {
+                        finalUri = cropResult.uri;
+                        setCropMessageVisible(true);
+                    }
+
+                    const similar = await findSimilarCars(finalUri);
+                    setVisualResults(similar);
+                    if (similar.length === 0) {
+                        setScanResult({ found: false });
+                    }
+                } catch (e) {
+                    console.error('Visual Search failed', e);
+                } finally {
+                    setIsSearchingVisual(false);
+                }
+            }
+        }
+    };
 
     const handleScanSearch = async () => {
         const options = { mediaType: 'photo' as const, quality: 1 as const };
@@ -41,7 +82,14 @@ const SearchScreen = () => {
             if (uri) {
                 setIsScanning(true);
                 try {
-                    const visionResult = await TextRecognition.recognize(uri);
+                    let finalUri = uri;
+                    const cropResult = await detectAndCrop(uri);
+                    if (cropResult) {
+                        finalUri = cropResult.uri;
+                        setCropMessageVisible(true);
+                    }
+
+                    const visionResult = await TextRecognition.recognize(finalUri);
                     const info = parseOCRText(visionResult.text);
                     const searchKey = `${info.brand} ${info.model} ${info.modelId}`;
                     const results = fuse.search(searchKey);
@@ -91,14 +139,17 @@ const SearchScreen = () => {
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
             <Appbar.Header style={{ backgroundColor: theme.colors.surface }}>
                 <Appbar.BackAction onPress={() => navigation.goBack()} />
-                <Appbar.Content title="Search Collection" titleStyle={styles.appTitle} />
+                <Appbar.Content title="Smart Search" titleStyle={styles.appTitle} />
             </Appbar.Header>
 
             <View style={styles.searchHeader}>
                 <TextInput
                     label="Search models, brands..."
                     value={searchQuery}
-                    onChangeText={setSearchQuery}
+                    onChangeText={(t) => {
+                        setSearchQuery(t);
+                        if (t) setVisualResults([]);
+                    }}
                     style={styles.searchInput}
                     mode="outlined"
                     outlineColor="transparent"
@@ -106,16 +157,26 @@ const SearchScreen = () => {
                     left={<TextInput.Icon icon="magnify" />}
                     right={searchQuery ? <TextInput.Icon icon="close" onPress={() => setSearchQuery('')} /> : null}
                 />
-                <Button
-                    icon="camera"
-                    mode="contained"
-                    onPress={handleScanSearch}
-                    loading={isScanning}
-                    style={styles.scanButton}
-                    contentStyle={styles.scanButtonContent}
-                >
-                    Scan Box Art
-                </Button>
+                <View style={styles.actionRow}>
+                    <Button
+                        icon="camera"
+                        mode="contained"
+                        onPress={handleScanSearch}
+                        loading={isScanning}
+                        style={[styles.actionButton, { flex: 1, marginRight: 8 }]}
+                    >
+                        Scan Box
+                    </Button>
+                    <Button
+                        icon="image-search"
+                        mode="contained"
+                        onPress={handleVisualSearch}
+                        loading={isSearchingVisual}
+                        style={[styles.actionButton, { flex: 1.2, backgroundColor: theme.colors.secondary }]}
+                    >
+                        Visual Match
+                    </Button>
+                </View>
             </View>
 
             {scanResult && (
@@ -134,7 +195,7 @@ const SearchScreen = () => {
                         <Surface style={[styles.surface, styles.errorBorder]} elevation={1}>
                             <List.Item
                                 title="Not Found"
-                                description="This car isn't in your collection yet."
+                                description="No match found in your collection."
                                 left={(props) => <List.Icon {...props} icon="alert-circle" color={theme.colors.error} />}
                                 right={() => <Button onPress={() => setScanResult(null)}>Clear</Button>}
                             />
@@ -143,19 +204,43 @@ const SearchScreen = () => {
                 </View>
             )}
 
+            {visualResults.length > 0 && (
+                <View style={styles.visualHeader}>
+                    <Text variant="labelLarge" style={styles.sectionTitle}>Visually Similar Cars</Text>
+                    <Button compact onPress={() => setVisualResults([])}>Clear</Button>
+                </View>
+            )}
+
             <FlatList
-                data={fuzzyResults}
+                data={visualResults.length > 0 ? visualResults : fuzzyResults}
                 renderItem={renderCarItem}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
-                    searchQuery && !fuzzyResults.length ? (
+                    (searchQuery || visualResults.length > 0) ? (
                         <View style={styles.emptyResults}>
                             <Text variant="bodyMedium" style={{ opacity: 0.6 }}>No matches found</Text>
                         </View>
-                    ) : null
+                    ) : (
+                        <View style={styles.searchGuide}>
+                            <List.Icon icon="magnify-scan" />
+                            <Text variant="bodyLarge" style={styles.guideText}>
+                                Search by text, scan a box, or take a photo to find visually similar cars.
+                            </Text>
+                        </View>
+                    )
                 }
             />
+
+            <Portal>
+                <Snackbar
+                    visible={cropMessageVisible}
+                    onDismiss={() => setCropMessageVisible(false)}
+                    duration={2000}
+                >
+                    Auto-cropped to focus on car/box 📸
+                </Snackbar>
+            </Portal>
 
             <ImagePreviewModal
                 visible={!!previewUrl}
@@ -181,6 +266,13 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         backgroundColor: 'transparent',
     },
+    actionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    actionButton: {
+        borderRadius: 8,
+    },
     scanButton: {
         borderRadius: 8,
     },
@@ -194,6 +286,17 @@ const styles = StyleSheet.create({
     scanResultWrapper: {
         paddingHorizontal: 16,
         marginBottom: 16,
+    },
+    visualHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+    },
+    sectionTitle: {
+        fontWeight: 'bold',
+        opacity: 0.8,
     },
     resultCardContainer: {
         marginBottom: 4,
@@ -251,6 +354,16 @@ const styles = StyleSheet.create({
     emptyResults: {
         padding: 40,
         alignItems: 'center',
+    },
+    searchGuide: {
+        padding: 40,
+        alignItems: 'center',
+        marginTop: 40,
+    },
+    guideText: {
+        textAlign: 'center',
+        opacity: 0.5,
+        marginTop: 16,
     }
 });
 

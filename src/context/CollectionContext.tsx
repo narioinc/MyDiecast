@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { vectorSearchService } from '../services/VectorSearchService';
 
 export interface Car {
     id: string;
@@ -21,13 +22,14 @@ const INITIAL_BRANDS = [
 interface CollectionContextType {
     cars: Car[];
     brands: string[];
-    addCar: (car: Omit<Car, 'id'>) => void;
-    removeCar: (id: string) => void;
-    updateCar: (car: Car) => void;
+    addCar: (car: Omit<Car, 'id'>) => Promise<void>;
+    removeCar: (id: string) => Promise<void>;
+    updateCar: (car: Car) => Promise<void>;
     addBrand: (brand: string) => void;
     shareCollection: () => Promise<void>;
     importCollection: () => Promise<boolean>;
     clearCollection: () => Promise<void>;
+    findSimilarCars: (imageUri: string) => Promise<Car[]>;
     isLoading: boolean;
 }
 
@@ -45,13 +47,15 @@ export const CollectionProvider = ({ children }: { children: ReactNode }) => {
     useEffect(() => {
         const loadData = async () => {
             try {
+                // Init vector service
+                await vectorSearchService.init();
+
                 const storedCars = await AsyncStorage.getItem(CARS_STORAGE_KEY);
                 const storedBrands = await AsyncStorage.getItem(BRANDS_STORAGE_KEY);
 
                 if (storedCars) setCars(JSON.parse(storedCars));
                 if (storedBrands) {
                     const parsedBrands = JSON.parse(storedBrands);
-                    // Combine initial and stored brands, avoiding duplicates
                     setBrands([...new Set([...INITIAL_BRANDS, ...parsedBrands])]);
                 }
             } catch (e) {
@@ -79,17 +83,60 @@ export const CollectionProvider = ({ children }: { children: ReactNode }) => {
         }
     }, [brands, isLoading]);
 
-    const addCar = (car: Omit<Car, 'id'>) => {
-        const newCar = { ...car, id: Math.random().toString(36).substr(2, 9) };
+    const addCar = async (car: Omit<Car, 'id'>) => {
+        const id = Math.random().toString(36).substr(2, 9);
+        const newCar = { ...car, id };
         setCars(prevCars => [...prevCars, newCar]);
+
+        // Background embedding generation
+        if (newCar.imageUrl) {
+            try {
+                const vector = await vectorSearchService.generateEmbedding(newCar.imageUrl);
+                if (vector) {
+                    await vectorSearchService.storeEmbedding(id, vector);
+                }
+            } catch (e) {
+                console.error('AddCar embedding failed:', e);
+            }
+        }
     };
 
-    const removeCar = (id: string) => {
+    const removeCar = async (id: string) => {
         setCars(prevCars => prevCars.filter((car) => car.id !== id));
+        await vectorSearchService.removeEmbedding(id);
     };
 
-    const updateCar = (updatedCar: Car) => {
+    const updateCar = async (updatedCar: Car) => {
+        const oldCar = cars.find(c => c.id === updatedCar.id);
         setCars(prevCars => prevCars.map((car) => (car.id === updatedCar.id ? updatedCar : car)));
+
+        // Regenerate embedding if image changed
+        if (updatedCar.imageUrl && updatedCar.imageUrl !== oldCar?.imageUrl) {
+            try {
+                const vector = await vectorSearchService.generateEmbedding(updatedCar.imageUrl);
+                if (vector) {
+                    await vectorSearchService.storeEmbedding(updatedCar.id, vector);
+                }
+            } catch (e) {
+                console.error('UpdateCar embedding failed:', e);
+            }
+        }
+    };
+
+    const findSimilarCars = async (imageUri: string): Promise<Car[]> => {
+        try {
+            const queryVector = await vectorSearchService.generateEmbedding(imageUri);
+            if (!queryVector) return [];
+
+            const matches = await vectorSearchService.findSimilar(queryVector);
+            // Map matches back to car objects
+            return matches
+                .map(match => cars.find(c => c.id === match.carId))
+                .filter((c): c is Car => !!c);
+        } catch (e) {
+            console.error('findSimilarCars failed:', e);
+            return [];
+        }
     };
 
     const shareCollection = async () => {
@@ -172,6 +219,7 @@ export const CollectionProvider = ({ children }: { children: ReactNode }) => {
             shareCollection,
             importCollection,
             clearCollection,
+            findSimilarCars,
             isLoading
         }}>
             {children}

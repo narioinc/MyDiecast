@@ -6,6 +6,8 @@ import { useNavigation } from '@react-navigation/native';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { parseOCRText, ParsedDiecastInfo } from '../utils/ocrParser';
+import { detectAndCrop } from '../utils/CropUtils';
+import { Snackbar } from 'react-native-paper';
 
 const AddCarScreen = () => {
     const theme = useTheme();
@@ -20,8 +22,17 @@ const AddCarScreen = () => {
     const [notes, setNotes] = useState('');
     const [imageUri, setImageUri] = useState<string | null>(null);
 
+    const [cropMessageVisible, setCropMessageVisible] = useState(false);
+
     const [ocrDialogVisible, setOcrDialogVisible] = useState(false);
     const [parsedInfo, setParsedInfo] = useState<ParsedDiecastInfo | null>(null);
+
+    // Editable OCR Fields
+    const [editBrand, setEditBrand] = useState('');
+    const [editModel, setEditModel] = useState('');
+    const [editScale, setEditScale] = useState('');
+    const [editModelId, setEditModelId] = useState('');
+    const [editManufacturer, setEditManufacturer] = useState('');
 
     const [brandMenuVisible, setBrandMenuVisible] = useState(false);
     const [isCustomBrand, setIsCustomBrand] = useState(false);
@@ -45,7 +56,17 @@ const AddCarScreen = () => {
         const result = useCamera ? await launchCamera(options) : await launchImageLibrary(options);
 
         if (result.assets && result.assets.length > 0) {
-            setImageUri(result.assets[0].uri || null);
+            const uri = result.assets[0].uri;
+            if (uri) {
+                // Attempt auto-crop
+                const cropResult = await detectAndCrop(uri);
+                if (cropResult) {
+                    setImageUri(cropResult.uri);
+                    setCropMessageVisible(true);
+                } else {
+                    setImageUri(uri);
+                }
+            }
         }
     };
 
@@ -60,11 +81,27 @@ const AddCarScreen = () => {
         if (result.assets && result.assets.length > 0) {
             const uri = result.assets[0].uri;
             if (uri) {
-                setImageUri(uri);
+                let finalUri = uri;
+                // Attempt auto-crop first to improve OCR
+                const cropResult = await detectAndCrop(uri);
+                if (cropResult) {
+                    finalUri = cropResult.uri;
+                    setCropMessageVisible(true);
+                }
+
+                setImageUri(finalUri);
                 try {
-                    const visionResult = await TextRecognition.recognize(uri);
+                    const visionResult = await TextRecognition.recognize(finalUri);
                     const info = parseOCRText(visionResult.text);
                     setParsedInfo(info);
+
+                    // Populate editable fields
+                    setEditBrand(info.brand || '');
+                    setEditModel(info.model || '');
+                    setEditScale(info.scale || '1:64');
+                    setEditModelId(info.modelId || '');
+                    setEditManufacturer(info.manufacturer || '');
+
                     setOcrDialogVisible(true);
                 } catch (e) {
                     console.error('OCR failed', e);
@@ -74,15 +111,13 @@ const AddCarScreen = () => {
     };
 
     const confirmOCR = () => {
-        if (parsedInfo) {
-            setBrand(parsedInfo.brand || parsedInfo.manufacturer);
-            setModel(parsedInfo.model);
-            setScale(parsedInfo.scale);
-            if (parsedInfo.modelId) {
-                setNotes(prev => `Model ID: ${parsedInfo.modelId}\n${prev}`);
-            }
-            setOcrDialogVisible(false);
+        setBrand(editBrand || editManufacturer);
+        setModel(editModel);
+        setScale(editScale);
+        if (editModelId) {
+            setNotes(prev => `Model ID: ${editModelId}\n${prev}`);
         }
+        setOcrDialogVisible(false);
     };
 
     return (
@@ -198,28 +233,76 @@ const AddCarScreen = () => {
 
             <Portal>
                 <Dialog visible={ocrDialogVisible} onDismiss={() => setOcrDialogVisible(false)}>
-                    <Dialog.Title>OCR Result</Dialog.Title>
+                    <Dialog.Title>Verify Detection</Dialog.Title>
                     <Dialog.Content>
-                        {parsedInfo && (
-                            <>
-                                <Text variant="bodyMedium">Detected following info from box art:</Text>
-                                <List.Item title="Make/Artist" description={parsedInfo.brand || 'Unknown'} />
-                                <Divider />
-                                <List.Item title="Model" description={parsedInfo.model || 'Unknown'} />
-                                <Divider />
-                                <List.Item title="Manufacturer" description={parsedInfo.manufacturer || 'Unknown'} />
-                                <Divider />
-                                <List.Item title="Scale" description={parsedInfo.scale} />
-                                <Divider />
-                                <List.Item title="Model ID" description={parsedInfo.modelId || 'None'} />
-                            </>
-                        )}
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            <Text variant="bodySmall" style={{ marginBottom: 16, opacity: 0.7 }}>
+                                Review and correct the information detected from the box art.
+                            </Text>
+
+                            <TextInput
+                                label="Brand"
+                                value={editBrand}
+                                onChangeText={setEditBrand}
+                                mode="outlined"
+                                dense
+                                style={styles.dialogInput}
+                            />
+
+                            <TextInput
+                                label="Model"
+                                value={editModel}
+                                onChangeText={setEditModel}
+                                mode="outlined"
+                                dense
+                                style={styles.dialogInput}
+                            />
+
+                            <TextInput
+                                label="Manufacturer"
+                                value={editManufacturer}
+                                onChangeText={setEditManufacturer}
+                                mode="outlined"
+                                dense
+                                style={styles.dialogInput}
+                            />
+
+                            <View style={styles.row}>
+                                <TextInput
+                                    label="Scale"
+                                    value={editScale}
+                                    onChangeText={setEditScale}
+                                    mode="outlined"
+                                    dense
+                                    style={[styles.dialogInput, { flex: 1, marginRight: 8 }]}
+                                />
+                                <TextInput
+                                    label="Model ID"
+                                    value={editModelId}
+                                    onChangeText={setEditModelId}
+                                    mode="outlined"
+                                    dense
+                                    style={[styles.dialogInput, { flex: 1 }]}
+                                />
+                            </View>
+                        </ScrollView>
                     </Dialog.Content>
                     <Dialog.Actions>
                         <Button onPress={() => setOcrDialogVisible(false)}>Cancel</Button>
                         <Button onPress={confirmOCR}>Confirm & Fill</Button>
                     </Dialog.Actions>
                 </Dialog>
+                <Snackbar
+                    visible={cropMessageVisible}
+                    onDismiss={() => setCropMessageVisible(false)}
+                    duration={3000}
+                    action={{
+                        label: 'OK',
+                        onPress: () => setCropMessageVisible(false),
+                    }}
+                >
+                    Auto-cropped to car/box 📸
+                </Snackbar>
             </Portal>
         </View>
     );
@@ -272,6 +355,9 @@ const styles = StyleSheet.create({
     },
     button: {
         marginTop: 8,
+    },
+    dialogInput: {
+        marginBottom: 12,
     },
 });
 

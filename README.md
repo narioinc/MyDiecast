@@ -4,6 +4,15 @@ MyDiecast is a premium, lightweight React Native application designed for diecas
 
 ---
 
+### 🔍 Smart Search
+MyDiecast goes beyond simple text search with AI-powered discovery:
+- **Fuzzy Search**: Find cars by partial brand or model names.
+- **Scan Box Art**: Uses on-device OCR to extract info from original packaging, with a new **editable verification dialog** for manual corrections.
+- **Visual Match (AI)**: Take a photo of any car to find it in your collection. Uses a private, on-device TensorFlow Lite model.
+- **Auto-Crop (Object Detection)**: Automatically focuses and crops photos to the best car or box view, improving both visual consistency and AI accuracy.
+
+---
+
 ## ✨ Features
 
 - **Smart Collection Entry**: Use built-in OCR (Text Recognition) to scan diecast box art and automatically pre-fill car details like brand and model.
@@ -14,8 +23,27 @@ MyDiecast is a premium, lightweight React Native application designed for diecas
 
 ---
 
-## 🔒 Data Safety & Security
+## 🛠️ Developer Guide
 
+### Prerequisites
+- Node.js >= 22.11.0
+- Android SDK 33
+- **AI Model**: Ensure `assets/mobilenet_v2.tflite` is present for visual search.
+
+### Setup
+1. Clone the repository.
+2. Install dependencies: `npm install`
+3. Start Metro: `npm start`
+4. Run on Android: `npx react-native run-android`
+
+### AI & Data
+- **Model**: MobileNetV2 (14MB TFLite)
+- **Vector Search**: SQLite with JS-based Cosine Similarity
+- **OCR**: Google ML Kit (on-device)
+
+---
+
+## 🔒 Data Safety & Security
 Your collection is valuable, and so is your privacy. MyDiecast follows these core security principles:
 
 1.  **Local Storage**: All your car data and preferences are stored locally on your device using encrypted-at-rest potential (depending on device settings). No data is ever sent to a central server.
