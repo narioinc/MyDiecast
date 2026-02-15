@@ -1,3 +1,4 @@
+![MyDiecast](/assets/app_icon.png)
 # MyDiecast
 
 MyDiecast is a lightweight React Native application designed for diecast car enthusiasts. It helps you manage your collection with ease, featuring intelligent entry, powerful search, and robust data portability.
