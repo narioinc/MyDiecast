@@ -1,0 +1,67 @@
+import { open, type Database } from '@op-engineering/op-sqlite';
+
+/**
+ * Helper function to serialize an embedding (Float32Array) into a Buffer/Blob
+ * for storage in SQLite. sqlite-vec expects a BLOB format.
+ */
+function serializeEmbedding(embedding: number[] | Float32Array): Buffer {
+  const float32Array = new Float32Array(embedding);
+  return Buffer.from(float32Array.buffer);
+}
+
+/**
+ * Helper function to deserialize a Buffer/Blob back to a Float32Array
+ * if needed after retrieval (optional, as queries primarily use SQL functions).
+ */
+function deserializeEmbedding(buffer: Buffer): Float32Array {
+  const float32Array = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.length / Float32Array.BYTES_PER_ELEMENT);
+  return float32Array;
+}
+
+/**
+ * Example usage of op-sqlite with sqlite-vec
+ */
+async function runVectorSearchExample() {
+  // 1. Open the database. op-sqlite has built-in support for sqlite-vec.
+  const db = open({ name: 'vectorDB.db' });
+
+  try {
+    // 2. Create a virtual table using the 'vec0' module for vector storage.
+    // F32_BLOB(3) specifies a 3-dimensional float32 vector stored as a BLOB.
+    await db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS items USING vec0(embedding F32_BLOB(3))');
+
+    // 3. Insert some sample vector data.
+    const vector1 = serializeEmbedding([1.0, 2.0, 3.0]);
+    const vector2 = serializeEmbedding([1.1, 2.1, 3.1]);
+    const vector3 = serializeEmbedding([10.0, 20.0, 30.0]);
+
+    await db.execute('INSERT INTO items (embedding) VALUES (?)', [vector1]);
+    await db.execute('INSERT INTO items (embedding) VALUES (?)', [vector2]);
+    await db.execute('INSERT INTO items (embedding) VALUES (?)', [vector3]);
+
+    console.log('Inserted sample vectors.');
+
+    // 4. Query for similar vectors using a distance metric (e.g., L2/Euclidean distance).
+    const queryVector = serializeEmbedding([1.2, 2.2, 3.2]);
+
+    // The vec_distance_l2 function calculates the distance between the stored vector and the query vector.
+    const results = await db.execute(
+      `SELECT
+        rowid,
+        vec_distance_l2(embedding, ?) AS distance,
+        embedding
+      FROM items
+      ORDER BY distance
+      LIMIT 2`,
+      [queryVector]
+    );
+
+    console.log('Query results (closest items):', results.rows?._array);
+
+  } catch (error) {
+    console.error('Error during sqlite-vec operation:', error);
+  } finally {
+    // 5. Close the database connection when done (optional in some environments).
+    // await db.close();
+  }
+}
